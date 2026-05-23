@@ -1,0 +1,348 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <iomanip>
+#include <ctime>
+#include <cstdlib>
+#include <algorithm>
+using namespace std;
+double toDouble(const string& s) {
+    double val = 0.0;
+    istringstream ss(s);
+    ss >> val;
+    return val;
+}
+
+int toInt(const string& s) {
+    int val = 0;
+    istringstream ss(s);
+    ss >> val;
+    return val;
+}
+
+string getCurrentDate() {
+    time_t now = time(NULL); 
+    char buf[20];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", localtime(&now));
+    return string(buf);
+}class Transaction {
+private:
+    string type;
+    double amount;
+    string date;
+public:
+    Transaction(string t, double a, string d)
+        : type(t), amount(a), date(d) {}
+
+    string getType()   const { return type;   }
+    double getAmount() const { return amount; }
+    string getDate()   const { return date;   }
+
+    string serialize() const {
+        ostringstream os;
+        os << "T|" << type << "|" << fixed << setprecision(2) << amount << "|" << date;
+        return os.str();
+    }
+    static Transaction deserialize(const string& line) {
+        stringstream ss(line.substr(2));
+        string type, amtStr, date;
+        getline(ss, type,   '|');
+        getline(ss, amtStr, '|');
+        getline(ss, date);
+        return Transaction(type, toDouble(amtStr), date);
+    }
+    void display() const {
+        ostringstream os;
+        os << "$" << fixed << setprecision(2) << amount;
+        cout << left << setw(12) << type
+             << setw(14) << os.str()
+             << date << "\n";
+    }
+};
+class Account {
+private:
+    int    id;
+    string name;
+    string pin;
+    double balance;
+    vector<Transaction> history;
+public:
+    Account(int id, const string& name, const string& pin, double initialDeposit)
+        : id(id), name(name), pin(pin), balance(initialDeposit) {
+        history.push_back(Transaction("CREATED", initialDeposit, getCurrentDate()));
+    }
+    Account(int id, const string& name, const string& pin,
+            double balance, const vector<Transaction>& hist)
+        : id(id), name(name), pin(pin), balance(balance), history(hist) {}
+
+    int    getId()      const { return id;      }
+    string getName()    const { return name;    }
+    double getBalance() const { return balance; }
+    bool   checkPin(const string& p) const { return pin == p; }
+
+    bool deposit(double amount) {
+        if (amount <= 0) return false;
+        balance += amount;
+        history.push_back(Transaction("DEPOSIT", amount, getCurrentDate()));
+        return true;
+    }
+
+    bool withdraw(double amount) {
+        if (amount <= 0 || amount > balance) return false;
+        balance -= amount;
+        history.push_back(Transaction("WITHDRAW", amount, getCurrentDate()));
+        return true;
+    }
+
+    void printBalance() const {
+        cout << "\n  Account Holder : " << name << "\n";
+        cout << "  Account ID     : " << id   << "\n";
+        cout << "  Balance        : RS"
+             << fixed << setprecision(2) << balance << "\n";
+    }
+    void printHistory() const {
+        cout << "\n  Account: " << name << " (ID: " << id << ")\n";
+        cout << string(50, '-') << "\n";
+        cout << left << setw(12) << "Type"
+             << setw(14) << "Amount" << "Date\n";
+        cout << string(50, '-') << "\n";
+        if (history.empty()) {
+            cout << "  No transactions found.\n";
+        } else {
+            for (int i = 0; i < (int)history.size(); i++)
+                history[i].display();
+        }
+        cout << string(50, '-') << "\n";
+    }
+    string serialize() const {
+        ostringstream os;
+        os << id << "|" << name << "|" << pin << "|"
+           << fixed << setprecision(2) << balance << "\n";
+        for (int i = 0; i < (int)history.size(); i++)
+            os << history[i].serialize() << "\n";
+        os << "END\n";
+        return os.str();
+    }
+};
+class Bank {
+private:
+    vector<Account> accounts;
+    const string    DATA_FILE;
+    int             nextId;
+    void recalcNextId() {
+        nextId = 1001;
+        for (int i = 0; i < (int)accounts.size(); i++)
+            if (accounts[i].getId() >= nextId)
+                nextId = accounts[i].getId() + 1;
+    }
+    Account* findById(int id) {
+        for (int i = 0; i < (int)accounts.size(); i++)
+            if (accounts[i].getId() == id) return &accounts[i];
+        return NULL;   
+    }
+
+    Account* login() {
+        int id;
+        string pin;
+        cout << "Account ID : "; cin >> id;
+        cout << "PIN        : "; cin >> pin;
+        Account* acc = findById(id);
+        if (acc == NULL || !acc->checkPin(pin)) {
+            cout << "\n[!] Invalid ID or PIN.\n";
+            return NULL;
+        }
+        return acc;
+    }
+
+    void save() const {
+        ofstream out(DATA_FILE.c_str());
+        if (!out) { cerr << "Error saving data.\n"; return; }
+        for (int i = 0; i < (int)accounts.size(); i++)
+            out << accounts[i].serialize();
+    }
+    void load() {
+        ifstream in(DATA_FILE.c_str());
+        if (!in) return;
+
+        string line;
+        while (getline(in, line)) {
+            if (line.empty()) continue;
+            stringstream ss(line);
+            string token, name, pin;
+            int id; double balance;
+            getline(ss, token, '|'); id      = toInt(token);
+            getline(ss, name,  '|');
+            getline(ss, pin,   '|');
+            getline(ss, token, '|'); balance = toDouble(token);
+            vector<Transaction> hist;
+            while (getline(in, line) && line != "END")
+                if (line.size() > 2 && line[0] == 'T' && line[1] == '|')
+                    hist.push_back(Transaction::deserialize(line));
+            accounts.push_back(Account(id, name, pin, balance, hist));
+        }
+        recalcNextId();
+    }
+    void pause() {
+        cout << "\nPress Enter to continue...";
+        cin.ignore();
+        cin.get();
+    }
+    void clearScreen() {
+        system("cls");   
+    }
+    void header(const string& title) {
+        clearScreen();
+        cout << "+==================================+\n";
+        cout << "|  " << left << setw(32) << title << "|\n";
+        cout << "+==================================+\n\n";
+    }
+public:
+    Bank() : DATA_FILE("accounts.dat"), nextId(1001) {
+        load();
+    }
+
+    void createAccount() {
+        header("CREATE NEW ACCOUNT");
+        string name, pin1, pin2;
+        double deposit;
+
+        cout << "Full Name : ";
+        cin.ignore();
+        getline(cin, name);
+        cout << "Set PIN   : "; cin >> pin1;
+        cout << "Confirm   : "; cin >> pin2;
+
+        if (pin1 != pin2) {
+            cout << "\n[!] PINs do not match.\n";
+            pause(); return;
+        }
+        cout << "Initial Deposit (RS): "; cin >> deposit;
+        if (deposit < 0) {
+            cout << "\n[!] Invalid amount.\n";
+            pause(); return;
+        }
+        accounts.push_back(Account(nextId, name, pin1, deposit));
+        int createdId = nextId;
+        nextId++;
+        save();
+        cout << "\n  Account created successfully!\n";
+        cout << "  Account ID : " << createdId << "\n";
+        cout << "  Balance    : RS" << fixed << setprecision(2) << deposit << "\n";
+        pause();
+    }
+    void depositMoney() {
+        header("DEPOSIT");
+        Account* acc = login();
+        if (acc == NULL) { pause(); return; }
+
+        double amount;
+        cout << "\nAmount (RS): "; cin >> amount;
+
+        if (acc->deposit(amount)) {
+            save();
+            cout << "\n  Deposit successful!\n";
+            cout << "  New Balance: RS"
+                 << fixed << setprecision(2) << acc->getBalance() << "\n";
+        } else {
+            cout << "\n[!] Invalid amount.\n";
+        }
+        pause();
+    }
+
+    void withdrawMoney() {
+        header("WITHDRAW");
+        Account* acc = login();
+        if (acc == NULL) { pause(); return; }
+
+        double amount;
+        cout << "\nAmount (RS): "; cin >> amount;
+        if (acc->withdraw(amount)) {
+            save();
+            cout << "\n  Withdrawal successful!\n";
+            cout << "  New Balance: RS"
+                 << fixed << setprecision(2) << acc->getBalance() << "\n";
+        } else {
+            cout << "\n[!] Invalid amount or insufficient funds.\n";
+            cout << "  Current Balance: RS"
+                 << fixed << setprecision(2) << acc->getBalance() << "\n";
+        }
+        pause();
+    }
+    void checkBalance() {
+        header("CHECK BALANCE");
+        Account* acc = login();
+        if (acc == NULL) { pause(); return; }
+        acc->printBalance();
+        pause();
+    }
+    void viewHistory() {
+        header("TRANSACTION HISTORY");
+        Account* acc = login();
+        if (acc == NULL) { pause(); return; }
+        acc->printHistory();
+        pause();
+    }
+    void deleteAccount() {
+        header("DELETE ACCOUNT");
+        Account* acc = login();
+        if (acc == NULL) { pause(); return; }
+        char confirm;
+        cout << "\n[!] Delete account " << acc->getId()
+             << " - " << acc->getName() << "? (y/n): ";
+        cin >> confirm;
+        if (tolower(confirm) == 'y') {
+            int id = acc->getId();
+            for (int i = 0; i < (int)accounts.size(); i++) {
+                if (accounts[i].getId() == id) {
+                    accounts.erase(accounts.begin() + i);
+                    break;
+                }
+            }
+            save();
+            cout << "\n  Account deleted.\n";
+        } else {
+            cout << "\n  Cancelled.\n";
+        }
+        pause();
+    }
+    void run() {
+        while (true) {
+            clearScreen();
+            cout << "+==================================+\n";
+            cout << "|     BANKING SYSTEM               |\n";
+            cout << "+==================================+\n";
+            cout << "|  1. Create New Account           |\n";
+            cout << "|  2. Deposit Money                |\n";
+            cout << "|  3. Withdraw Money               |\n";
+            cout << "|  4. Check Balance                |\n";
+            cout << "|  5. Transaction History          |\n";
+            cout << "|  6. Delete Account               |\n";
+            cout << "|  0. Exit                         |\n";
+            cout << "+==================================+\n";
+            cout << "\nChoice: ";
+            int choice;
+            if (!(cin >> choice)) {
+                cin.clear();
+                cin.ignore(1000, '\n');
+                continue;
+            }
+            switch (choice) {
+                case 1: createAccount(); break;
+                case 2: depositMoney();  break;
+                case 3: withdrawMoney(); break;
+                case 4: checkBalance();  break;
+                case 5: viewHistory();   break;
+                case 6: deleteAccount(); break;
+                case 0: cout << "\nGoodbye!\n"; return;
+                default: cout << "\n[!] Invalid option.\n"; pause();
+            }
+        }
+    }
+};
+int main() {
+    Bank bank;
+    bank.run();
+    return 0;
+}
